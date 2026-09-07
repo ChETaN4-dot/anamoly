@@ -24,6 +24,7 @@ import {
   Database,
   Layers,
   Upload,
+  Info,
 } from "lucide-react";
 
 export default function ModuleB() {
@@ -46,14 +47,22 @@ export default function ModuleB() {
   );
 
   const analysis = driftQuery.data;
+  const unit = "µA";
+  const paramName = "DCL Leakage Current";
+  const specLimit = analysis?.specLimit ?? 50.0;
+
+  const bestModel = analysis?.bestModel || analysis?.rankedModels?.[0];
+  const secondBestModel = analysis?.secondBestModel || analysis?.rankedModels?.[1];
 
   // Chart data transformation
   const chartData = useMemo(() => {
-    if (!analysis || !analysis.checkpoints) return [];
+    if (!analysis || !analysis.checkpoints || analysis.checkpoints.length === 0) return [];
 
     const result: Array<{
       time_h: number;
       actual_dcl?: number;
+      best_fit_pred?: number;
+      second_best_pred?: number;
       linear_pred?: number;
       ridge_pred?: number;
       exp_pred?: number;
@@ -63,49 +72,41 @@ export default function ModuleB() {
     for (const pt of analysis.checkpoints) {
       result.push({
         time_h: pt.time_h,
-        actual_dcl: pt.dcl_uA,
+        actual_dcl: pt.value ?? pt.dcl_uA,
       });
     }
 
-    // Add 168h predictions if available and 168h checkpoint wasn't already in measurements
-    if (analysis.predictions && showPredictions) {
-      const predLinear = analysis.predictions.linear.predicted168h;
-      const predRidge = analysis.predictions.ridge.predicted168h;
-      const predExp = analysis.predictions.exponential.predicted168h;
+    // Add 168h predictions if available and drift prediction is supported
+    if (analysis.driftSupported && bestModel) {
+      const predBest = Number(bestModel.predicted168h.toFixed(3));
+      const predSecond = secondBestModel ? Number(secondBestModel.predicted168h.toFixed(3)) : undefined;
+
+      // Anchor the prediction line at 24h so Recharts can draw a line from 24h -> 168h
+      const item24 = result.find((r) => r.time_h === 24);
+      if (item24 && item24.actual_dcl !== undefined) {
+        item24.best_fit_pred = item24.actual_dcl;
+        item24.second_best_pred = item24.actual_dcl;
+      }
 
       const has168Measured = analysis.checkpoints.some((c) => c.time_h === 168);
 
       if (has168Measured) {
-        // Overlay prediction on existing 168h point for comparison
         const item168 = result.find((r) => r.time_h === 168);
         if (item168) {
-          item168.linear_pred = predLinear;
-          item168.ridge_pred = predRidge;
-          item168.exp_pred = predExp;
+          item168.best_fit_pred = predBest;
+          item168.second_best_pred = predSecond;
         }
       } else {
-        // Add 168h prediction point
         result.push({
           time_h: 168,
-          linear_pred: predLinear,
-          ridge_pred: predRidge,
-          exp_pred: predExp,
+          best_fit_pred: predBest,
+          second_best_pred: predSecond,
         });
       }
     }
 
     return result.sort((a, b) => a.time_h - b.time_h);
-  }, [analysis, showPredictions]);
-
-  // Determine appropriate spec limit based on component rating
-  const specLimit = useMemo(() => {
-    if (!analysis?.component) return 50.0;
-    const ratedV = analysis.component.rated_voltage_V;
-    const cap = analysis.component.capacitance_uF;
-    // Standard tantalum formula: DCL <= 0.01 * C * V (or 1.7 uA min for 6.8uF/25V)
-    if (cap === 6.8 && ratedV === 35) return 1.7; // From NASA paper reference
-    return 50.0;
-  }, [analysis]);
+  }, [analysis, bestModel, secondBestModel]);
 
   return (
     <div className="site-shell" style={{ background: "#111412", minHeight: "100vh", color: "#edf0e6", padding: "40px 6%" }}>
@@ -150,7 +151,6 @@ export default function ModuleB() {
       <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: "30px" }}>
         {/* Left Column: Component Selection */}
         <div>
-
           {/* Component Metadata & Provenance Card */}
           {analysis?.component && (
             <div style={{ background: "#161a18", border: "1px solid #334038", padding: "20px", borderRadius: "4px" }}>
@@ -168,9 +168,15 @@ export default function ModuleB() {
                   <strong style={{ fontFamily: "IBM Plex Mono" }}>{analysis.component.lot_id}</strong>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#8a9588" }}>Capacitance:</span>
-                  <span>{analysis.component.capacitance_uF} µF</span>
+                  <span style={{ color: "#8a9588" }}>Component Type:</span>
+                  <span style={{ fontFamily: "IBM Plex Mono", color: "#d6f24a" }}>{analysis.component.component_type || "TANTALUM"}</span>
                 </div>
+                {analysis.component.capacitance_uF !== undefined && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#8a9588" }}>Capacitance:</span>
+                    <span>{analysis.component.capacitance_uF} µF</span>
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
                   <span style={{ color: "#8a9588" }}>Rated / Test V:</span>
                   <span>{analysis.component.rated_voltage_V}V / {analysis.component.test_voltage_V}V</span>
@@ -186,9 +192,9 @@ export default function ModuleB() {
                     fontFamily: "IBM Plex Mono",
                     padding: "3px 8px",
                     borderRadius: "3px",
-                    background: analysis.component.data_type.includes("REAL") ? "#e8a25333" : "#d6f24a22",
-                    color: analysis.component.data_type.includes("REAL") ? "#e8a253" : "#d6f24a",
-                    border: `1px solid ${analysis.component.data_type.includes("REAL") ? "#e8a25355" : "#d6f24a55"}`,
+                    background: analysis.component.data_type?.includes("REAL") ? "#e8a25333" : "#d6f24a22",
+                    color: analysis.component.data_type?.includes("REAL") ? "#e8a253" : "#d6f24a",
+                    border: `1px solid ${analysis.component.data_type?.includes("REAL") ? "#e8a25355" : "#d6f24a55"}`,
                   }}>
                     {analysis.component.data_type}
                   </span>
@@ -210,7 +216,7 @@ export default function ModuleB() {
               <div>
                 <h3 style={{ margin: "0 0 5px", color: "#e57463", fontSize: "16px" }}>Insufficient Measurements for Drift Analysis</h3>
                 <p style={{ margin: 0, color: "#f6c4ba", fontSize: "13px" }}>
-                  {analysis.message}. Available checkpoints: [{analysis.checkpoints.map(c => `${c.time_h}h`).join(", ")}]. Missing checkpoints: [{analysis.missingCheckpoints.map(t => `${t}h`).join(", ")}].
+                  {analysis.message}. Available checkpoints: [{(analysis.checkpoints || []).map(c => `${c.time_h}h`).join(", ")}].
                 </p>
               </div>
             </div>
@@ -223,10 +229,10 @@ export default function ModuleB() {
                 <AlertTriangle size={24} style={{ color: "#e57463", flexShrink: 0 }} />
                 <div>
                   <h4 style={{ margin: "0 0 4px", color: "#e57463", fontFamily: "IBM Plex Mono", fontSize: "14px", letterSpacing: "0.08em" }}>
-                    ⚠️ EARLY REJECTION FLAG: HIGH DRIFT RATE DETECTED
+                    ⚠️ EARLY REJECTION FLAG: HIGH DRIFT RATE / SPEC BREACH DETECTED
                   </h4>
                   <p style={{ margin: 0, color: "#f6c4ba", fontSize: "12px", lineHeight: "1.4" }}>
-                    {analysis.rejectionReason} (Calculated Dynamic Safety Slope = {analysis.dynamicSafetySlopeThreshold.toFixed(4)} µA/h).
+                    {analysis.rejectionReason} (Calculated Dynamic Safety Slope = {analysis.dynamicSafetySlopeThreshold?.toFixed(4) ?? "N/A"} {unit}/h).
                   </p>
                 </div>
               </div>
@@ -236,33 +242,43 @@ export default function ModuleB() {
             </div>
           )}
 
+          {/* Forecast Notice if not drift-supported */}
+          {analysis && analysis.sufficient && !analysis.driftSupported && (
+            <div style={{ background: "#1c231f", border: "1px solid #334038", padding: "14px 18px", borderRadius: "4px", marginBottom: "20px", display: "flex", alignItems: "center", gap: "10px", color: "#a6b0a2", fontSize: "12px" }}>
+              <Info size={16} style={{ color: "#d6f24a", flexShrink: 0 }} />
+              <span>{analysis.forecastNotice || "Extrapolation forecast is specialized for degradation parameters (DCL, RDS_ON, IDDQ). Specification limit monitoring is active."}</span>
+            </div>
+          )}
+
           {/* Interactive Recharts Graph */}
-          {analysis && analysis.sufficient && (
+          {analysis && (
             <div style={{ background: "#161a18", border: "1px solid #334038", padding: "25px", borderRadius: "4px", marginBottom: "30px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: "18px" }}>DCL Leakage Current vs Burn-In Time</h3>
+                  <h3 style={{ margin: 0, fontSize: "18px" }}>{paramName} vs Burn-In Time</h3>
                   <span style={{ color: "#8a9588", fontSize: "12px", fontFamily: "IBM Plex Mono" }}>
-                    Measured vs Predicted 168h Trajectories
+                    Measured vs Predicted 168h Trajectories ({unit})
                   </span>
                 </div>
 
                 <div style={{ display: "flex", gap: "15px", fontSize: "12px" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={showPredictions}
-                      onChange={(e) => setShowPredictions(e.target.checked)}
-                    />
-                    <span>Show Predictions</span>
-                  </label>
+                  {analysis.driftSupported && (
+                    <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={showPredictions}
+                        onChange={(e) => setShowPredictions(e.target.checked)}
+                      />
+                      <span>Show Predictions</span>
+                    </label>
+                  )}
                   <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
                     <input
                       type="checkbox"
                       checked={showLimit}
                       onChange={(e) => setShowLimit(e.target.checked)}
                     />
-                    <span>Show Spec Limit ({specLimit} µA)</span>
+                    <span>Show Spec Limit ({specLimit} {unit})</span>
                   </label>
                 </div>
               </div>
@@ -280,11 +296,11 @@ export default function ModuleB() {
                     <YAxis
                       stroke="#8a9588"
                       tick={{ fill: "#8a9588", fontSize: 12, fontFamily: "IBM Plex Mono" }}
-                      unit=" µA"
+                      unit={` ${unit}`}
                     />
                     <Tooltip
                       contentStyle={{ background: "#1d2420", borderColor: "#526152", color: "#edf0e6", fontFamily: "IBM Plex Mono", fontSize: "12px" }}
-                      formatter={(val: any) => [`${Number(val).toFixed(3)} µA`]}
+                      formatter={(val: any, name: any) => [`${Number(val).toFixed(2)} ${unit}`, name]}
                     />
                     <Legend wrapperStyle={{ fontFamily: "IBM Plex Mono", fontSize: "12px", paddingTop: "10px" }} />
 
@@ -293,7 +309,7 @@ export default function ModuleB() {
                         y={specLimit}
                         stroke="#e57463"
                         strokeDasharray="4 4"
-                        label={{ value: `SPEC LIMIT (${specLimit} µA)`, fill: "#e57463", fontSize: 10, position: "top" }}
+                        label={{ value: `SPEC LIMIT (${specLimit} ${unit})`, fill: "#e57463", fontSize: 10, position: "top" }}
                       />
                     )}
 
@@ -301,49 +317,36 @@ export default function ModuleB() {
                     <Line
                       type="monotone"
                       dataKey="actual_dcl"
-                      name="Actual DCL Measurement"
+                      name={`Actual Measured ${paramName}`}
                       stroke="#d6f24a"
                       strokeWidth={3}
                       dot={{ r: 6, fill: "#d6f24a" }}
                       activeDot={{ r: 8 }}
                     />
 
-                    {/* Linear Prediction */}
-                    {showPredictions && (
+                    {/* Best Fit Model Prediction */}
+                    {showPredictions && analysis.driftSupported && bestModel && (
                       <Line
                         type="monotone"
-                        dataKey="linear_pred"
-                        name="Linear Extrapolation (0h+24h)"
+                        dataKey="best_fit_pred"
+                        name={`★ Best Fit: ${bestModel.name}`}
+                        stroke="#60a5fa"
+                        strokeWidth={2.5}
+                        strokeDasharray="4 4"
+                        dot={{ r: 6, fill: "#60a5fa" }}
+                      />
+                    )}
+
+                    {/* 2nd Best Model Prediction */}
+                    {showPredictions && analysis.driftSupported && secondBestModel && (
+                      <Line
+                        type="monotone"
+                        dataKey="second_best_pred"
+                        name={`◆ 2nd Best: ${secondBestModel.name}`}
                         stroke="#e8a253"
                         strokeWidth={2}
-                        strokeDasharray="5 5"
-                        dot={{ r: 5, fill: "#e8a253" }}
-                      />
-                    )}
-
-                    {/* Ridge Prediction */}
-                    {showPredictions && (
-                      <Line
-                        type="monotone"
-                        dataKey="ridge_pred"
-                        name="Ridge Regression (LOCO)"
-                        stroke="#60a5fa"
-                        strokeWidth={2}
                         strokeDasharray="3 3"
-                        dot={{ r: 5, fill: "#60a5fa" }}
-                      />
-                    )}
-
-                    {/* Exponential Fit Prediction */}
-                    {showPredictions && (
-                      <Line
-                        type="monotone"
-                        dataKey="exp_pred"
-                        name="Exponential Curve Fit"
-                        stroke="#a855f7"
-                        strokeWidth={2}
-                        strokeDasharray="2 2"
-                        dot={{ r: 4, fill: "#a855f7" }}
+                        dot={{ r: 5, fill: "#e8a253" }}
                       />
                     )}
                   </LineChart>
@@ -353,65 +356,62 @@ export default function ModuleB() {
           )}
 
           {/* Model Comparison & Evaluation Metrics Panel */}
-          {analysis?.predictions && (
+          {analysis?.predictions && analysis.driftSupported && (
             <div style={{ background: "#161a18", border: "1px solid #334038", padding: "25px", borderRadius: "4px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px" }}>
                 <BarChart2 size={20} style={{ color: "#d6f24a" }} />
                 <h3 style={{ margin: 0, fontSize: "18px" }}>Model Comparison & Early Prediction (24h → 168h)</h3>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "15px", marginBottom: "20px" }}>
-                {/* 1. Linear Extrapolation */}
-                <div style={{ background: "#1d2420", border: "1px solid #3a473d", padding: "15px", borderRadius: "4px" }}>
-                  <div style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#e8a253", marginBottom: "5px" }}>
-                    MODEL 1 — LINEAR BASELINE
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px", marginBottom: "20px" }}>
+                {bestModel && (
+                  <div style={{ background: "#1d2420", border: "1px solid #3a473d", padding: "15px", borderRadius: "4px" }}>
+                    <div style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#60a5fa", marginBottom: "5px", textTransform: "uppercase" }}>
+                      MODEL 1 — {bestModel.name}
+                    </div>
+                    <div style={{ fontSize: "22px", fontWeight: "bold", fontFamily: "IBM Plex Mono", color: "#edf0e6", margin: "5px 0" }}>
+                      {bestModel.predicted168h.toFixed(2)} {unit}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "#8a9588", marginBottom: "10px" }}>
+                      Predicted 168h {paramName}
+                    </div>
+                    <div style={{ fontSize: "11px", borderTop: "1px solid #334038", paddingTop: "8px", color: "#a6b0a2" }}>
+                      <div>LOCO MAE / RMSE: <strong>{bestModel.mae.toFixed(3)} / {bestModel.rmse.toFixed(3)} {unit}</strong></div>
+                      {bestModel.r2 !== undefined && <div>R²: <strong>{bestModel.r2.toFixed(3)}</strong></div>}
+                    </div>
                   </div>
-                  <div style={{ fontSize: "22px", fontWeight: "bold", fontFamily: "IBM Plex Mono", color: "#edf0e6", margin: "5px 0" }}>
-                    {analysis.predictions.linear.predicted168h.toFixed(2)} µA
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#8a9588", marginBottom: "10px" }}>Predicted 168h DCL</div>
-                  <div style={{ fontSize: "11px", borderTop: "1px solid #334038", paddingTop: "8px", color: "#a6b0a2" }}>
-                    <div>LOCO MAE: <strong>{analysis.predictions.linear.mae.toFixed(3)} µA</strong></div>
-                    <div>LOCO RMSE: <strong>{analysis.predictions.linear.rmse.toFixed(3)} µA</strong></div>
-                  </div>
-                </div>
+                )}
 
-                {/* 2. Ridge Regression */}
-                <div style={{ background: "#1d2420", border: "1px solid #3a473d", padding: "15px", borderRadius: "4px" }}>
-                  <div style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#60a5fa", marginBottom: "5px" }}>
-                    MODEL 2 — RIDGE REGRESSION
+                {secondBestModel && (
+                  <div style={{ background: "#1d2420", border: "1px solid #3a473d", padding: "15px", borderRadius: "4px" }}>
+                    <div style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#e8a253", marginBottom: "5px", textTransform: "uppercase" }}>
+                      MODEL 2 — {secondBestModel.name}
+                    </div>
+                    <div style={{ fontSize: "22px", fontWeight: "bold", fontFamily: "IBM Plex Mono", color: "#edf0e6", margin: "5px 0" }}>
+                      {secondBestModel.predicted168h.toFixed(2)} {unit}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "#8a9588", marginBottom: "10px" }}>
+                      Predicted 168h {paramName}
+                    </div>
+                    <div style={{ fontSize: "11px", borderTop: "1px solid #334038", paddingTop: "8px", color: "#a6b0a2" }}>
+                      <div>LOCO MAE / RMSE: <strong>{secondBestModel.mae.toFixed(3)} / {secondBestModel.rmse.toFixed(3)} {unit}</strong></div>
+                      {secondBestModel.r2 !== undefined && <div>R²: <strong>{secondBestModel.r2.toFixed(3)}</strong></div>}
+                    </div>
                   </div>
-                  <div style={{ fontSize: "22px", fontWeight: "bold", fontFamily: "IBM Plex Mono", color: "#edf0e6", margin: "5px 0" }}>
-                    {analysis.predictions.ridge.predicted168h.toFixed(2)} µA
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#8a9588", marginBottom: "10px" }}>
-                    Trained on {analysis.predictions.ridge.trainedOnComponentsCount} held-out comps
-                  </div>
-                  <div style={{ fontSize: "11px", borderTop: "1px solid #334038", paddingTop: "8px", color: "#a6b0a2" }}>
-                    <div>LOCO MAE: <strong>{analysis.predictions.ridge.mae.toFixed(3)} µA</strong></div>
-                    <div>LOCO RMSE: <strong>{analysis.predictions.ridge.rmse.toFixed(3)} µA</strong></div>
-                  </div>
-                </div>
-
-                {/* 3. Exponential Degradation */}
-                <div style={{ background: "#1d2420", border: "1px solid #3a473d", padding: "15px", borderRadius: "4px" }}>
-                  <div style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#a855f7", marginBottom: "5px" }}>
-                    MODEL 3 — EXPONENTIAL FIT
-                  </div>
-                  <div style={{ fontSize: "22px", fontWeight: "bold", fontFamily: "IBM Plex Mono", color: "#edf0e6", margin: "5px 0" }}>
-                    {analysis.predictions.exponential.predicted168h.toFixed(2)} µA
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#8a9588", marginBottom: "10px" }}>Curve Fit: I(t)=I0+a(1-e^-bt)</div>
-                  <div style={{ fontSize: "11px", borderTop: "1px solid #334038", paddingTop: "8px", color: "#a6b0a2" }}>
-                    <div>Fit RMSE: <strong>{analysis.predictions.exponential.rmse.toFixed(3)} µA</strong></div>
-                    <div>Fit R²: <strong>{analysis.predictions.exponential.r2.toFixed(3)}</strong></div>
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Comparison Conclusion */}
-              <div style={{ background: "#1d2420", border: "1px solid #526152", padding: "15px", borderRadius: "4px", fontSize: "13px", color: "#d6f24a" }}>
-                <strong>LOCO Cross-Validation Result:</strong> {analysis.predictions.comparisonSummary}
+              {/* Comparison Conclusion & Ranking Box */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ background: "#1d2420", border: "1px solid #526152", padding: "15px", borderRadius: "4px", fontSize: "13px", color: "#d6f24a" }}>
+                  <div style={{ fontFamily: "IBM Plex Mono", marginBottom: "4px" }}>1st Best = {bestModel?.name || "N/A"}</div>
+                  <div style={{ fontFamily: "IBM Plex Mono" }}>2nd Best = {secondBestModel?.name || "N/A"}</div>
+                </div>
+                {analysis.predictions.comparisonSummary && (
+                  <div style={{ background: "#1d2420", border: "1px solid #3a473d", padding: "12px 15px", borderRadius: "4px", fontSize: "12px", color: "#a6b0a2" }}>
+                    <strong>LOCO Cross-Validation Result:</strong> {analysis.predictions.comparisonSummary}
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -101,10 +101,14 @@ jspm_packages/
 tmp/
 temp/
 
-# Database
+# Database & Local Persistent Data
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
+data/
+.manus-logs/
 
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/

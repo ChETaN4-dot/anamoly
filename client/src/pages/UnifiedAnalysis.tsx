@@ -52,39 +52,53 @@ export default function UnifiedAnalysis() {
 
   const data = unifiedQuery.data;
 
-  // Chart data transformation
+  const bestModel = data?.drift?.bestModel || data?.drift?.rankedModels?.[0];
+  const secondBestModel = data?.drift?.secondBestModel || data?.drift?.rankedModels?.[1];
+
+  // Chart data transformation aligned strictly with Module B
   const chartData = useMemo(() => {
-    if (!data?.component?.measurements) return [];
+    if (!data?.drift?.checkpoints || data.drift.checkpoints.length === 0) return [];
 
     const result: Array<{
       time_h: number;
       actual_dcl?: number;
-      linear_pred?: number;
-      ridge_pred?: number;
+      best_fit_pred?: number;
+      second_best_pred?: number;
     }> = [];
 
-    // Actual points
-    for (const m of data.component.measurements) {
+    // Actual measured points from drift checkpoints (parameter-isolated DCL)
+    for (const pt of data.drift.checkpoints) {
       result.push({
-        time_h: m.time_h,
-        actual_dcl: m.dcl_uA,
+        time_h: pt.time_h,
+        actual_dcl: (pt as any).value ?? pt.dcl_uA,
       });
     }
 
-    // Add 168h prediction if available
-    if (data.drift?.predictions) {
-      const predLinear = data.drift.predictions.linear.predicted168h;
-      const predRidge = data.drift.predictions.ridge.predicted168h;
+    // Add 168h predictions if available and drift prediction is supported
+    if (data.drift.driftSupported && bestModel) {
+      const predBest = Number(bestModel.predicted168h.toFixed(3));
+      const predSecond = secondBestModel ? Number(secondBestModel.predicted168h.toFixed(3)) : undefined;
 
-      const item168 = result.find((r) => r.time_h === 168);
-      if (item168) {
-        item168.linear_pred = predLinear;
-        item168.ridge_pred = predRidge;
+      // Anchor the prediction line at 24h so Recharts can draw a line from 24h -> 168h
+      const item24 = result.find((r) => r.time_h === 24);
+      if (item24 && item24.actual_dcl !== undefined) {
+        item24.best_fit_pred = item24.actual_dcl;
+        item24.second_best_pred = item24.actual_dcl;
+      }
+
+      const has168Measured = data.drift.checkpoints.some((c: any) => c.time_h === 168);
+
+      if (has168Measured) {
+        const item168 = result.find((r) => r.time_h === 168);
+        if (item168) {
+          item168.best_fit_pred = predBest;
+          item168.second_best_pred = predSecond;
+        }
       } else {
         result.push({
           time_h: 168,
-          linear_pred: predLinear,
-          ridge_pred: predRidge,
+          best_fit_pred: predBest,
+          second_best_pred: predSecond,
         });
       }
     }
@@ -92,7 +106,7 @@ export default function UnifiedAnalysis() {
     return result
       .filter((r) => r.time_h >= zoomRange[0] && r.time_h <= zoomRange[1])
       .sort((a, b) => a.time_h - b.time_h);
-  }, [data, zoomRange]);
+  }, [data, bestModel, secondBestModel, zoomRange]);
 
   // Real CSV Export Handler
   const handleExportCSV = () => {
@@ -260,7 +274,7 @@ export default function UnifiedAnalysis() {
                   <div style={{ height: "100%", width: `${Math.min(100, data.explanation.specMarginPct)}%`, background: "#d6f24a" }} />
                 </div>
                 <span style={{ fontSize: "11px", color: "#8a9588", fontFamily: "IBM Plex Mono" }}>
-                  Current DCL: {data.component.measurements[data.component.measurements.length - 1]?.dcl_uA.toFixed(2)} / {data.specCriterion?.value ?? 50.0} µA
+                  Current DCL: {data.component.measurements[data.component.measurements.length - 1]?.dcl_uA.toFixed(2)} / {data.criterion.value} µA
                 </span>
               </div>
 
@@ -280,13 +294,19 @@ export default function UnifiedAnalysis() {
 
               {/* Card 3: 168h Forecast Comparison */}
               <div style={{ background: "#161a18", border: "1px solid #334038", padding: "16px", borderRadius: "4px" }}>
-                <span style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#8a9588" }}>168H FORECAST (RIDGE)</span>
-                <div style={{ fontSize: "22px", fontWeight: "bold", color: data.drift.predictions?.ridge.predicted168h && data.drift.predictions.ridge.predicted168h > (data.specCriterion?.value ?? 50.0) ? "#e57463" : "#edf0e6", margin: "6px 0 4px" }}>
-                  {data.drift.predictions?.ridge.predicted168h.toFixed(2)} µA
+                <span style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#8a9588" }}>
+                  168H FORECAST (★ {bestModel?.shortName || "BEST FIT"})
+                </span>
+                <div style={{ fontSize: "22px", fontWeight: "bold", color: bestModel?.predicted168h && bestModel.predicted168h > data.criterion.value ? "#e57463" : "#edf0e6", margin: "6px 0 4px" }}>
+                  {bestModel ? `${bestModel.predicted168h.toFixed(2)} µA` : `${data.drift.predictions?.ridge.predicted168h.toFixed(2) ?? "N/A"} µA`}
                 </div>
                 <div style={{ fontSize: "11px", color: "#8a9588", fontFamily: "IBM Plex Mono", lineHeight: "1.4" }}>
-                  Linear: {data.drift.predictions?.linear.predicted168h.toFixed(2)} µA<br />
-                  Early Slope: {data.drift.earlySlope?.toFixed(4)} µA/h
+                  {secondBestModel ? (
+                    <>◆ 2nd Best ({secondBestModel.shortName}): {secondBestModel.predicted168h.toFixed(2)} µA<br /></>
+                  ) : (
+                    <>Linear: {data.drift.predictions?.linear.predicted168h.toFixed(2)} µA<br /></>
+                  )}
+                  Early Slope (0-24h): {data.drift.earlySlope?.toFixed(4)} µA/h
                 </div>
               </div>
 
@@ -398,11 +418,11 @@ export default function UnifiedAnalysis() {
                   </div>
 
                   <div style={{ background: "#131715", padding: "15px", borderRadius: "3px" }}>
-                    <h5 style={{ margin: "0 0 10px", color: "#e8a253" }}>MODULE B (DRIFT & RIDGE)</h5>
+                    <h5 style={{ margin: "0 0 10px", color: "#e8a253" }}>MODULE B (DRIFT & MODEL RANKING)</h5>
                     <div>Early Slope (0-24h): <strong>{data.drift.earlySlope?.toFixed(4)} µA/h</strong></div>
-                    <div>Linear Pred (168h): <strong>{data.drift.predictions?.linear.predicted168h.toFixed(2)} µA</strong></div>
-                    <div>Ridge Pred (168h): <strong>{data.drift.predictions?.ridge.predicted168h.toFixed(2)} µA</strong></div>
-                    <div>LOCO MAE / RMSE: <strong>{data.drift.predictions?.ridge.mae.toFixed(3)} / {data.drift.predictions?.ridge.rmse.toFixed(3)} µA (N=54)</strong></div>
+                    <div>★ Best Fit ({bestModel?.shortName ?? "Ridge"}): <strong>{bestModel?.predicted168h.toFixed(2) ?? data.drift.predictions?.ridge.predicted168h.toFixed(2)} µA</strong></div>
+                    <div>◆ 2nd Best ({secondBestModel?.shortName ?? "Linear"}): <strong>{secondBestModel?.predicted168h.toFixed(2) ?? data.drift.predictions?.linear.predicted168h.toFixed(2)} µA</strong></div>
+                    <div>LOCO MAE / RMSE: <strong>{data.drift.predictions?.ridge.mae.toFixed(3)} / {data.drift.predictions?.ridge.rmse.toFixed(3)} µA</strong></div>
                   </div>
 
                   <div style={{ background: "#131715", padding: "15px", borderRadius: "3px" }}>
@@ -494,11 +514,31 @@ export default function UnifiedAnalysis() {
                   {/* Actual Measured Line */}
                   <Line type="monotone" dataKey="actual_dcl" name="Actual Measured DCL" stroke="#d6f24a" strokeWidth={3} dot={{ r: 6, fill: "#d6f24a" }} activeDot={{ r: 8 }} />
 
-                  {/* Linear Prediction */}
-                  <Line type="monotone" dataKey="linear_pred" name="Linear Extrapolation (0h+24h)" stroke="#e8a253" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 5, fill: "#e8a253" }} />
+                  {/* Best Fit Model Prediction */}
+                  {bestModel && (
+                    <Line
+                      type="monotone"
+                      dataKey="best_fit_pred"
+                      name={`★ Best Fit: ${bestModel.name}`}
+                      stroke="#60a5fa"
+                      strokeWidth={2.5}
+                      strokeDasharray="4 4"
+                      dot={{ r: 6, fill: "#60a5fa" }}
+                    />
+                  )}
 
-                  {/* Ridge Prediction */}
-                  <Line type="monotone" dataKey="ridge_pred" name="Ridge Regression (LOCO)" stroke="#60a5fa" strokeWidth={2} strokeDasharray="3 3" dot={{ r: 5, fill: "#60a5fa" }} />
+                  {/* 2nd Best Model Prediction */}
+                  {secondBestModel && (
+                    <Line
+                      type="monotone"
+                      dataKey="second_best_pred"
+                      name={`◆ 2nd Best: ${secondBestModel.name}`}
+                      stroke="#e8a253"
+                      strokeWidth={2}
+                      strokeDasharray="3 3"
+                      dot={{ r: 5, fill: "#e8a253" }}
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
             </div>

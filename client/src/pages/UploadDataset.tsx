@@ -7,6 +7,10 @@ import { ArrowLeft, CheckCircle2, AlertTriangle, FileSpreadsheet, Upload, Chevro
 
 export default function UploadDataset() {
   const [, setLocation] = useLocation();
+  const utils = trpc.useUtils();
+  const [fileName, setFileName] = useState<string>("");
+  const [csvContent, setCsvContent] = useState<string>("");
+  const [clientValidation, setClientValidation] = useState<ValidationResult | null>(null);
   const [ingestedSummary, setIngestedSummary] = useState<{ lotCount: number; componentCount: number; firstLotId?: string; firstCompId?: string } | null>(null);
 
   const uploadMutation = trpc.analysis.uploadCSV.useMutation({
@@ -19,8 +23,11 @@ export default function UploadDataset() {
           firstLotId: firstRow?.lot_id,
           firstCompId: firstRow?.component_id,
         });
+        utils.analysis.getComponents.invalidate();
+        utils.analysis.getLots.invalidate();
+        utils.analysis.getDatabaseStats.invalidate();
         toast.success("Dataset successfully validated & ingested!", {
-          description: `Added ${data.validation.summary.componentCount} components across ${data.validation.summary.lotCount} lots into system memory.`,
+          description: `Added ${data.validation.summary.componentCount} components across ${data.validation.summary.lotCount} lots into SQLite database.`,
         });
       } else {
         toast.error("Dataset validation failed", {
@@ -254,21 +261,29 @@ QUAL-012,LOT-QUAL-SPACE-01,MIL-PRF-55365 Tantalum Capacitor (100uF/50V),100,50,5
               {ingestedSummary && (
                 <div style={{ marginTop: "20px", paddingTop: "15px", borderTop: "1px solid #334038", display: "flex", flexDirection: "column", gap: "10px" }}>
                   <span style={{ fontSize: "10px", fontFamily: "IBM Plex Mono", color: "#d6f24a", letterSpacing: "0.1em", fontWeight: 600 }}>
-                    ✓ DATASET INGESTED INTO SYSTEM MEMORY
+                    ✓ DATASET INGESTED & PERSISTED IN SQLITE DATABASE
                   </span>
-                  <div style={{ display: "flex", gap: "10px" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                     <button
-                      onClick={() => setLocation(`/module-a${ingestedSummary.firstLotId ? `?lotId=${ingestedSummary.firstLotId}` : ""}`)}
-                      style={{ flex: 1, background: "#1a221d", border: "1px solid #3d4d42", color: "#d6f24a", padding: "10px", borderRadius: "4px", fontSize: "11px", fontFamily: "IBM Plex Mono", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
+                      onClick={() => setLocation(`/analysis${ingestedSummary.firstCompId ? `?componentId=${ingestedSummary.firstCompId}` : ""}`)}
+                      style={{ width: "100%", background: "#d6f24a", border: "none", color: "#111412", padding: "10px", borderRadius: "4px", fontSize: "11px", fontFamily: "IBM Plex Mono", fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                     >
-                      Analyze Lot (Module A) <ChevronRight size={14} />
+                      Open in Unified Screening Workbench <ChevronRight size={14} />
                     </button>
-                    <button
-                      onClick={() => setLocation(`/module-b${ingestedSummary.firstCompId ? `?componentId=${ingestedSummary.firstCompId}` : ""}`)}
-                      style={{ flex: 1, background: "#1a221d", border: "1px solid #3d4d42", color: "#edf0e6", padding: "10px", borderRadius: "4px", fontSize: "11px", fontFamily: "IBM Plex Mono", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
-                    >
-                      Analyze Component (Module B) <ChevronRight size={14} />
-                    </button>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        onClick={() => setLocation(`/module-a${ingestedSummary.firstLotId ? `?lotId=${ingestedSummary.firstLotId}` : ""}`)}
+                        style={{ flex: 1, background: "#1a221d", border: "1px solid #3d4d42", color: "#d6f24a", padding: "10px", borderRadius: "4px", fontSize: "11px", fontFamily: "IBM Plex Mono", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
+                      >
+                        Analyze Lot (Module A) <ChevronRight size={14} />
+                      </button>
+                      <button
+                        onClick={() => setLocation(`/module-b${ingestedSummary.firstCompId ? `?componentId=${ingestedSummary.firstCompId}` : ""}`)}
+                        style={{ flex: 1, background: "#1a221d", border: "1px solid #3d4d42", color: "#edf0e6", padding: "10px", borderRadius: "4px", fontSize: "11px", fontFamily: "IBM Plex Mono", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
+                      >
+                        Analyze Component (Module B) <ChevronRight size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

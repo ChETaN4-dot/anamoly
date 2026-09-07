@@ -268,7 +268,7 @@ export default function DatasetCascadeSelector({
                 letterSpacing: "0.05em",
               }}
             >
-              <Cpu size={12} style={{ color: "#8a9588" }} /> 3. COMPONENT SERIAL NO. (DCL @ 24H)
+              <Cpu size={12} style={{ color: "#8a9588" }} /> 3. COMPONENT SERIAL NO. (VALUE @ 24H)
             </label>
             <select
               value={activeCompId}
@@ -290,10 +290,13 @@ export default function DatasetCascadeSelector({
               }}
             >
               {filteredComponents.map((comp) => {
-                const val24 = comp.measurements.find((m) => m.time_h === 24)?.dcl_uA ?? comp.measurements[0]?.dcl_uA ?? 0;
+                const m24 = comp.measurements.find((m) => m.time_h === 24) || comp.measurements[0];
+                const paramName = m24?.parameter || comp.available_parameters?.[0] || "DCL";
+                const unitName = m24?.unit || "µA";
+                const val24 = m24?.dcl_uA ?? 0;
                 return (
                   <option key={comp.component_id} value={comp.component_id}>
-                    {comp.component_id} (DCL: {val24.toFixed(2)} µA @ 24h)
+                    {comp.component_id} ({paramName}: {val24.toFixed(2)} {unitName} @ {m24?.time_h ?? 0}h)
                   </option>
                 );
               })}

@@ -49,19 +49,19 @@ export default function AddComponent() {
       return;
     }
 
-    const measurements: Array<{ time_h: number; dcl_uA: number }> = [
-      { time_h: 0, dcl_uA: v0 },
-      { time_h: 24, dcl_uA: v24 },
+    const measurements: Array<{ time_h: number; value: number; dcl_uA: number }> = [
+      { time_h: 0, value: v0, dcl_uA: v0 },
+      { time_h: 24, value: v24, dcl_uA: v24 },
     ];
 
     if (val96h !== "") {
       const v96 = parseFloat(val96h);
-      if (!isNaN(v96) && v96 >= 0) measurements.push({ time_h: 96, dcl_uA: v96 });
+      if (!isNaN(v96) && v96 >= 0) measurements.push({ time_h: 96, value: v96, dcl_uA: v96 });
     }
 
     if (val168h !== "") {
       const v168 = parseFloat(val168h);
-      if (!isNaN(v168) && v168 >= 0) measurements.push({ time_h: 168, dcl_uA: v168 });
+      if (!isNaN(v168) && v168 >= 0) measurements.push({ time_h: 168, value: v168, dcl_uA: v168 });
     }
 
     addMutation.mutate({

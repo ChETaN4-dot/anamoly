@@ -2,12 +2,15 @@ export type DatasetRow = {
   component_id: string;
   lot_id: string;
   component_type: string;
-  capacitance_uF: number;
-  rated_voltage_V: number;
-  test_voltage_V: number;
-  test_temperature_C: number;
+  capacitance_uF?: number;
+  rated_voltage_V?: number;
+  test_voltage_V?: number;
+  test_temperature_C?: number;
   time_h: number;
-  dcl_uA: number;
+  parameter?: string;
+  value?: number;
+  unit?: string;
+  dcl_uA: number; // legacy alias, equal to value
   data_source: string;
   data_type: string;
   line_number?: number;
@@ -29,6 +32,7 @@ export type ValidationResult = {
     validRows: number;
     componentCount: number;
     lotCount: number;
+    parameters: string[];
     dataTypes: string[];
   };
 };
@@ -62,7 +66,7 @@ export function validateCSVContent(csvText: string): ValidationResult {
       valid: false,
       errors: [{ row: 0, field: "header", message: "CSV file is empty or missing headers." }],
       rows: [],
-      summary: { totalRows: 0, validRows: 0, componentCount: 0, lotCount: 0, dataTypes: [] },
+      summary: { totalRows: 0, validRows: 0, componentCount: 0, lotCount: 0, parameters: [], dataTypes: [] },
     };
   }
 
@@ -81,6 +85,9 @@ export function validateCSVContent(csvText: string): ValidationResult {
   const colTestV = getCol(["test_voltage_v", "test_voltage", "test_v"]);
   const colTestTemp = getCol(["test_temperature_c", "test_temperature", "temp_c"]);
   const colTime = getCol(["time_h", "time", "time_hours", "checkpoint_h"]);
+  const colParam = getCol(["parameter", "param", "param_name", "parameter_name"]);
+  const colValue = getCol(["value", "val", "measurement", "reading"]);
+  const colUnit = getCol(["unit", "units"]);
   const colDcl = getCol(["dcl_ua", "dcl", "leakage_current_ua", "current_ua"]);
   const colSource = getCol(["data_source", "source"]);
   const colType = getCol(["data_type", "type_tag"]);
@@ -88,19 +95,19 @@ export function validateCSVContent(csvText: string): ValidationResult {
   if (colComponentId < 0) errors.push({ row: 1, field: "header", message: "Missing required column: component_id" });
   if (colLotId < 0) errors.push({ row: 1, field: "header", message: "Missing required column: lot_id" });
   if (colTime < 0) errors.push({ row: 1, field: "header", message: "Missing required column: time_h" });
-  if (colDcl < 0) errors.push({ row: 1, field: "header", message: "Missing required column: dcl_uA" });
+  if (colDcl < 0 && colValue < 0) errors.push({ row: 1, field: "header", message: "Missing measurement column: either 'value' or 'dcl_uA' is required" });
 
   if (errors.length > 0) {
     return {
       valid: false,
       errors,
       rows: [],
-      summary: { totalRows: lines.length - 1, validRows: 0, componentCount: 0, lotCount: 0, dataTypes: [] },
+      summary: { totalRows: lines.length - 1, validRows: 0, componentCount: 0, lotCount: 0, parameters: [], dataTypes: [] },
     };
   }
 
   const seenKeys = new Set<string>();
-  const componentMetadataMap = new Map<string, { type: string; cap: number; ratedV: number; testV: number; temp: number }>();
+  const componentMetadataMap = new Map<string, { type: string; cap?: number; ratedV?: number; testV?: number; temp?: number }>();
 
   for (let i = 1; i < lines.length; i++) {
     const lineNumber = i + 1;
@@ -109,12 +116,14 @@ export function validateCSVContent(csvText: string): ValidationResult {
     const compId = colComponentId >= 0 ? cells[colComponentId] : "";
     const lotId = colLotId >= 0 ? cells[colLotId] : "";
     const compType = colComponentType >= 0 ? cells[colComponentType] : "Solid MnO2 Tantalum Capacitor";
-    const capStr = colCapacitance >= 0 ? cells[colCapacitance] : "47";
-    const ratedVStr = colRatedV >= 0 ? cells[colRatedV] : "25";
-    const testVStr = colTestV >= 0 ? cells[colTestV] : "25";
+    const capStr = colCapacitance >= 0 ? cells[colCapacitance] : "";
+    const ratedVStr = colRatedV >= 0 ? cells[colRatedV] : "";
+    const testVStr = colTestV >= 0 ? cells[colTestV] : "";
     const testTempStr = colTestTemp >= 0 ? cells[colTestTemp] : "125";
     const timeStr = colTime >= 0 ? cells[colTime] : "";
-    const dclStr = colDcl >= 0 ? cells[colDcl] : "";
+    const paramStr = colParam >= 0 ? cells[colParam] : "DCL";
+    const unitStr = colUnit >= 0 ? cells[colUnit] : (paramStr === "DCL" ? "µA" : "unit");
+    const valStr = colValue >= 0 ? cells[colValue] : (colDcl >= 0 ? cells[colDcl] : "");
     const source = colSource >= 0 ? cells[colSource] : "UPLOADED_CSV";
     const dataType = colType >= 0 ? cells[colType] : "USER_UPLOADED";
 
@@ -136,41 +145,23 @@ export function validateCSVContent(csvText: string): ValidationResult {
       errors.push({ row: lineNumber, field: "time_h", message: "Negative time_h value is not allowed", value: timeStr });
     }
 
-    // DCL validation
-    const dcluA = Number(dclStr);
-    if (dclStr === "" || isNaN(dcluA) || !Number.isFinite(dcluA)) {
-      errors.push({ row: lineNumber, field: "dcl_uA", message: "Invalid numeric dcl_uA value", value: dclStr });
-    } else if (dcluA < 0) {
-      errors.push({ row: lineNumber, field: "dcl_uA", message: "Negative dcl_uA measurement is physically impossible", value: dclStr });
+    // Measurement Value validation
+    const numVal = Number(valStr);
+    if (valStr === "" || isNaN(numVal) || !Number.isFinite(numVal)) {
+      errors.push({ row: lineNumber, field: "value", message: "Invalid numeric measurement value", value: valStr });
     }
 
-    // Capacitance validation
-    const cap = Number(capStr);
-    if (isNaN(cap) || cap <= 0) {
-      errors.push({ row: lineNumber, field: "capacitance_uF", message: "Capacitance must be a positive number", value: capStr });
-    }
+    // Optional numeric parsing
+    const cap = capStr ? Number(capStr) : undefined;
+    const ratedV = ratedVStr ? Number(ratedVStr) : undefined;
+    const testV = testVStr ? Number(testVStr) : undefined;
+    const tempC = testTempStr ? Number(testTempStr) : undefined;
 
-    // Voltage validation
-    const ratedV = Number(ratedVStr);
-    const testV = Number(testVStr);
-    if (isNaN(ratedV) || ratedV <= 0) {
-      errors.push({ row: lineNumber, field: "rated_voltage_V", message: "Rated voltage must be a positive number", value: ratedVStr });
-    }
-    if (isNaN(testV) || testV <= 0) {
-      errors.push({ row: lineNumber, field: "test_voltage_V", message: "Test voltage must be a positive number", value: testVStr });
-    }
-
-    // Temp validation
-    const tempC = Number(testTempStr);
-    if (isNaN(tempC)) {
-      errors.push({ row: lineNumber, field: "test_temperature_C", message: "Test temperature must be a valid number", value: testTempStr });
-    }
-
-    // Duplicate check
-    const key = `${compId}::${timeH}`;
+    // Duplicate check per (component, parameter, time)
+    const key = `${compId}::${paramStr}::${timeH}`;
     if (compId && !isNaN(timeH)) {
       if (seenKeys.has(key)) {
-        errors.push({ row: lineNumber, field: "duplicate", message: `Duplicate measurement for component ${compId} at time ${timeH}h`, value: key });
+        errors.push({ row: lineNumber, field: "duplicate", message: `Duplicate measurement for component ${compId} (${paramStr}) at time ${timeH}h`, value: key });
       } else {
         seenKeys.add(key);
       }
@@ -180,11 +171,11 @@ export function validateCSVContent(csvText: string): ValidationResult {
     if (compId) {
       const existing = componentMetadataMap.get(compId);
       if (existing) {
-        if (existing.cap !== cap || existing.ratedV !== ratedV || existing.testV !== testV || existing.temp !== tempC) {
+        if (cap !== undefined && existing.cap !== undefined && existing.cap !== cap) {
           errors.push({
             row: lineNumber,
             field: "inconsistent_metadata",
-            message: `Inconsistent component metadata for ${compId} across checkpoints (cap: ${existing.cap} vs ${cap}, temp: ${existing.temp} vs ${tempC})`,
+            message: `Inconsistent capacitance for ${compId} (previous: ${existing.cap}, current: ${cap})`,
             value: compId,
           });
         }
@@ -203,7 +194,10 @@ export function validateCSVContent(csvText: string): ValidationResult {
         test_voltage_V: testV,
         test_temperature_C: tempC,
         time_h: timeH,
-        dcl_uA: dcluA,
+        parameter: paramStr,
+        value: numVal,
+        unit: unitStr,
+        dcl_uA: numVal,
         data_source: source,
         data_type: dataType,
         line_number: lineNumber,
@@ -213,6 +207,7 @@ export function validateCSVContent(csvText: string): ValidationResult {
 
   const componentCount = new Set(rows.map((r) => r.component_id)).size;
   const lotCount = new Set(rows.map((r) => r.lot_id)).size;
+  const parameters = Array.from(new Set(rows.map((r) => r.parameter || "DCL")));
   const dataTypes = Array.from(new Set(rows.map((r) => r.data_type)));
 
   return {
@@ -224,6 +219,7 @@ export function validateCSVContent(csvText: string): ValidationResult {
       validRows: rows.length,
       componentCount,
       lotCount,
+      parameters,
       dataTypes,
     },
   };

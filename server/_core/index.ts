@@ -8,6 +8,8 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { getDatabaseStats, resolveDatabasePath, getDb } from "../db";
+import { datasetStore } from "../data/datasetStore";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -19,7 +21,7 @@ function isPortAvailable(port: number): Promise<boolean> {
   });
 }
 
-async function findAvailablePort(startPort: number = 3000): Promise<number> {
+async function findAvailablePort(startPort: number = 5000): Promise<number> {
   for (let port = startPort; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) {
       return port;
@@ -29,13 +31,51 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Initialize persistent SQLite dataset store
+  datasetStore.init();
+
   const app = express();
   const server = createServer(app);
+
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Production Health Check endpoint with live SQLite ping
+  app.get("/api/health", (_req, res) => {
+    try {
+      const stats = getDatabaseStats();
+      if (!stats.connected) {
+        return res.status(503).json({
+          status: "error",
+          database: "disconnected",
+          timestamp: new Date().toISOString(),
+        });
+      }
+      return res.status(200).json({
+        status: "ok",
+        database: "connected",
+        dbPath: stats.dbPath,
+        totalComponents: stats.totalComponents,
+        totalLots: stats.totalLots,
+        totalMeasurements: stats.totalMeasurements,
+        totalAnalysisRuns: stats.totalAnalysisRuns,
+        supportedParameters: stats.parameters,
+        version: "2.0.0-production-upgrade",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        status: "error",
+        error: err.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+
   // tRPC API
   app.use(
     "/api/trpc",
@@ -44,6 +84,7 @@ async function startServer() {
       createContext,
     })
   );
+
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
@@ -51,15 +92,16 @@ async function startServer() {
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  const preferredPort = parseInt(process.env.PORT || "5000");
+  const isProd = process.env.NODE_ENV === "production";
+  const port = isProd ? preferredPort : await findAvailablePort(preferredPort);
 
-  if (port !== preferredPort) {
+  if (!isProd && port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`[Burn-In Sentinel] Server running at http://0.0.0.0:${port}/ (Database: ${resolveDatabasePath()})`);
   });
 }
 
