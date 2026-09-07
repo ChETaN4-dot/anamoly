@@ -1,9 +1,12 @@
-FROM node:24-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
 # Enable pnpm via corepack
 RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
+
+# Add build tools for native dependencies (like better-sqlite3 on Alpine)
+RUN apk add --no-cache python3 make g++
 
 # Copy dependency specifications
 COPY package.json pnpm-lock.yaml ./
@@ -19,7 +22,7 @@ COPY . .
 RUN pnpm run build
 
 # Production Runtime Stage
-FROM node:24-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
